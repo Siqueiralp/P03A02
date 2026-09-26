@@ -8,18 +8,12 @@ static void MX_TIM4_Init(void);
 
 int main(void)
 {
-  uint32_t i;
-  volatile uint32_t d_mm;
-  volatile uint32_t d_mm2;
-  uint32_t timeout;
+  volatile uint32_t d_mm = 0U;
+  uint32_t measurement_start;
   HAL_Init();
   SystemClock_Config();
   MX_GPIO_Init();
   MX_TIM4_Init();
-
-  HAL_TIM_IC_Start(&htim4,TIM_CHANNEL_1);
-  HAL_TIM_IC_Start_IT(&htim4,TIM_CHANNEL_2);
-
 
   while (1)
   {
@@ -29,20 +23,41 @@ int main(void)
       while (!HAL_GPIO_ReadPin(BUTTON_1_GPIO_Port, BUTTON_1_Pin)); // aguarda o botao ser pressionado
     }
 
-    HAL_GPIO_WritePin(HCSR04_TRIGGER_GPIO_Port,HCSR04_TRIGGER_Pin, 1); // aciona trigger
-    HAL_Delay(1);
-    htim4.Instance->CNT = 0; // zera o contador do timer 
-    HAL_TIM_IC_Start(&htim4, TIM_CHANNEL_1); // reInicia o timer e interrupt
+    gElapsed = 0U;
+    __HAL_TIM_SET_COUNTER(&htim4, 0U);
+    HAL_TIM_IC_Start(&htim4, TIM_CHANNEL_1);
     HAL_TIM_IC_Start_IT(&htim4, TIM_CHANNEL_2);
-    gElapsed = 0;
-    timeout = 0;
-    HAL_GPIO_WritePin(HCSR04_TRIGGER_GPIO_Port,HCSR04_TRIGGER_Pin, 0); // desliga trigger
-    while((gElapsed==0)&&(timeout<10000000))
+
+    // O HC-SR04 requer um pulso de trigger de pelo menos 10 us.
+    // TIM4 opera a 1 MHz (1 tick = 1 us), então usamos o próprio timer
+    // para gerar a largura do pulso sem depender de HAL_Delay (milissegundos).
+    HAL_GPIO_WritePin(HCSR04_TRIGGER_GPIO_Port, HCSR04_TRIGGER_Pin, GPIO_PIN_SET);
+    __HAL_TIM_SET_COUNTER(&htim4, 0U);
+    while (__HAL_TIM_GET_COUNTER(&htim4) < 10U)
     {
-      timeout++; // enrola
-    }    
-    d_mm = (gElapsed/1000000)*340; // transforma de microssegundos para segundos e multiplica por 340m/s
-    HAL_Delay(50);
+    }
+    HAL_GPIO_WritePin(HCSR04_TRIGGER_GPIO_Port, HCSR04_TRIGGER_Pin, GPIO_PIN_RESET);
+
+    measurement_start = HAL_GetTick();
+    while ((gElapsed == 0U) && ((HAL_GetTick() - measurement_start) < 30U))
+    {
+    }
+
+    if (gElapsed != 0U)
+    {
+      // gElapsed está em microssegundos. A distância é metade do percurso
+      // do som: d_mm = tempo_us * 343000 mm/s / (2 * 1e6).
+      d_mm = (gElapsed * 343U + 1000U) / 2000U;
+    }
+    else
+    {
+      // Timeout: encerra a captura para a próxima medição.
+      d_mm = 0U;
+      HAL_TIM_IC_Stop(&htim4, TIM_CHANNEL_1);
+      HAL_TIM_IC_Stop_IT(&htim4, TIM_CHANNEL_2);
+    }
+
+    HAL_Delay(60);
   }
     /* USER CODE END WHILE */
 
